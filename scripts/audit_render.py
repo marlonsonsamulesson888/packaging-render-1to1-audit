@@ -120,10 +120,23 @@ def audit(px_per_mm, window=None, items=(), decors=(), folds_y_mm=(), folds_x_mm
                     rec["window_clear_mm"][side] = "出窗/压纸" if (v == 0 and outside.any()) else round(v, 2)
         masks.append((name, m_any))
         res["items"].append(rec)
+    # Keep full-layer geometry diagnostic separate from window-visible geometry.
+    # EDT measures nearest occupied pixel centres; retain that existing convention.
     for (n1, a1), (n2, a2) in zip(masks, masks[1:]):
-        g = min_gap_mm(a1, a2, ppm)
-        res.setdefault("adjacent_visible_gaps_mm", []).append({"pair": f"{n1}-{n2}", "gap_mm": g})
-        if min_item_gap is not None and g is not None:
+        raw_gap = min_gap_mm(a1, a2, ppm)
+        res.setdefault("adjacent_full_layer_gaps_mm", []).append(
+            {"pair": f"{n1}-{n2}", "gap_mm": raw_gap})
+        if win is None:
+            g, reason = None, "未提供窗口蒙版，窗内可见净距未测量"
+        else:
+            g = min_gap_mm(a1 & win, a2 & win, ppm)
+            reason = "至少一件在窗内无可见像素，无法量相邻可见净距" if g is None else None
+        rec = {"pair": f"{n1}-{n2}", "gap_mm": g,
+               "scope": "item alpha intersected with window", "reason": reason}
+        res.setdefault("adjacent_visible_gaps_mm", []).append(rec)
+        if g is None:
+            res["checks"].append({"rule": f"{n1}-{n2} 可见净距", "status": "warn", "detail": reason})
+        elif min_item_gap is not None:
             res["checks"].append({"rule": f"{n1}-{n2} 可见净距 ≥{min_item_gap}mm", "status": "ok" if g >= min_item_gap else "fail", "detail": f"{g} mm"})
     for spec in decors:
         name, path, off = parse_layer(spec)
@@ -177,7 +190,7 @@ def to_markdown(r):
     for it in r["items"]:
         L.append(f"- {it['name']}：外包框 {it['bbox_mm']}，窗内 {it.get('inside_window_pct')}%，离窗边 {it.get('window_clear_mm')}")
     for g in r.get("adjacent_visible_gaps_mm", []):
-        L.append(f"- 相邻可见净距 {g['pair']}：{g['gap_mm']} mm")
+        L.append(f"- 相邻可见净距 {g['pair']}：" + (f"{g['gap_mm']} mm" if g["gap_mm"] is not None else g["reason"]))
     for d in r["decor"]:
         L.append(f"- 装饰 {d['name']}：离折线 实心 {d.get('fold_clear_mm_solid')}，含抗锯齿 {d.get('fold_clear_mm_any_alpha')}")
     for s in r["sources"]:
@@ -222,3 +235,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
